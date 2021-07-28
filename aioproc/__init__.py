@@ -1,18 +1,21 @@
 """Top-level package for aioproc."""
 
 __author__ = """Aaron Yang"""
-__email__ = 'code@jieyu.ai'
-__version__ = '0.1.0'
+__email__ = "code@jieyu.ai"
+__version__ = "0.1.0"
 
 
 """Main module."""
 import functools
 import functools
+import os
+import subprocess
 from typing import List, Tuple
 import asyncio
 import shlex
 import sys
 import fire
+
 
 async def _echo(stream):
     while True:
@@ -22,6 +25,7 @@ async def _echo(stream):
             break
         print(line)
 
+
 def _async_wrap(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -29,9 +33,10 @@ def _async_wrap(func):
 
     return wrapper
 
+
 class OutputCollector:
     def __init__(self, encoding="utf-8"):
-        self.encoding=encoding
+        self.encoding = encoding
         self.buffer = []
 
     async def __call__(self, stream):
@@ -41,8 +46,9 @@ class OutputCollector:
             if not line:
                 break
             self.buffer.append(line.rstrip("\n"))
-    
-def expose(funcs:dict):
+
+
+def expose(funcs: dict):
     """expose `funcs` so that it can be called by `aiofunc`
 
     each pair in `funcs` defines a `name` (alias) and a function, which will be actually called when `name` is invoked
@@ -51,7 +57,7 @@ def expose(funcs:dict):
     """
     _exposed = {}
 
-    for name ,func in funcs.items():
+    for name, func in funcs.items():
         if asyncio.iscoroutinefunction(func):
             _exposed[name] = _async_wrap(func)
         else:
@@ -59,7 +65,15 @@ def expose(funcs:dict):
 
     fire.Fire(_exposed)
 
-async def aiofunc(package: str, func: str, args:Tuple=None, kwargs:dict=None, encoding='utf-8', delay=0)->Tuple[List, List]:
+
+async def aiofunc(
+    package: str,
+    func: str,
+    args: Tuple = None,
+    kwargs: dict = None,
+    encoding="utf-8",
+    delay=0,
+) -> Tuple[List, List]:
     """invoke a python function(which defined in `package.__main__`) in another process, and collects output(stdout, stderr)
 
     args and kwargs should be serializable
@@ -83,7 +97,7 @@ async def aiofunc(package: str, func: str, args:Tuple=None, kwargs:dict=None, en
         kwargs = [f"--{key}='{value}'" for key, value in kwargs.items() if kwargs]
     else:
         kwargs = []
-    
+
     cmds = [sys.executable, "-m", package, func, *args, *kwargs]
     out, err = OutputCollector(), OutputCollector()
 
@@ -92,32 +106,37 @@ async def aiofunc(package: str, func: str, args:Tuple=None, kwargs:dict=None, en
 
     return out.buffer, err.buffer
 
-async def aioprocess(*cmds, stdout_handler=_echo, stderr_handler=_echo):
+
+async def aioprocess(
+    *cmds, stdout_handler=_echo, stderr_handler=_echo, inherit_env=True, detached=False
+):
     """execute cmds in asyncio process, and echo it's stdout/stderr
+
+    if detached is specified, the subprocess will be detached with parent after created.
+    if inherit_env is specified, then subprocess with inherite envars from parent process.
 
     Examples:
         >>> aioprocess("ls")
         >>> aioprocess("ping -c 10 www.baidu.com")
         >>> aioprocess("ping", "-c", "10", "www.baidu.com")
-        >>> aioprocess("python -m http.server")
-    Args:
-        cmds ([type]): command line
-        stdout_handler ([type], optional): [description]. Defaults to echo.
-        stderr_handler ([type], optional): [description]. Defaults to echo.
+        >>> aioprocess("python -m http.server", detached=True)
     """
     if len(cmds) == 1 and isinstance(cmds[0], str):
         cmds = shlex.split(cmds[0])
-        
+
+    env = os.environ.copy() if inherit_env else None
+
     proc = await asyncio.create_subprocess_exec(
         *cmds,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=detached,
+        env=env,
     )
 
     if stdout_handler:
         asyncio.ensure_future(stdout_handler(proc.stdout))
     if stderr_handler:
         asyncio.ensure_future(stderr_handler(proc.stderr))
-
-    await proc.wait()
-
+        
+    return proc
